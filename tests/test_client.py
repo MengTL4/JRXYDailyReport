@@ -106,3 +106,101 @@ def test_non_object_json_is_an_error():
 
     with pytest.raises(SubmissionError, match="JSON 对象"):
         SandauClient(session=session).submit(CONFIG)
+
+
+def test_get_history_returns_unique_dates_in_reverse_order():
+    session = FakeSession(
+        FakeResponse(
+            body={
+                "code": 0,
+                "msg": "",
+                "data": [
+                    {"batchno": 20260708, "usercode": CONFIG.usercode},
+                    {"batchno": "20260710", "usercode": CONFIG.usercode},
+                    {"batchno": 20260710, "usercode": CONFIG.usercode},
+                ],
+            }
+        )
+    )
+
+    history = SandauClient(session=session).get_history(
+        CONFIG, timestamp_ms=1700000000123
+    )
+
+    assert history.batchnos == ("20260710", "20260708")
+    url, request = session.calls[0]
+    assert url.endswith("/report/report/getMyReport")
+    assert request["json"] == {"usercode": CONFIG.usercode, "batchno": ""}
+    assert request["headers"]["ts"] == "1700000000123"
+    assert "Cookie" not in request["headers"]
+
+
+def test_get_history_rejects_invalid_record_date():
+    session = FakeSession(
+        FakeResponse(
+            body={
+                "code": 0,
+                "msg": "",
+                "data": [{"batchno": "today", "usercode": CONFIG.usercode}],
+            }
+        )
+    )
+
+    with pytest.raises(SubmissionError, match="日期格式无效"):
+        SandauClient(session=session).get_history(CONFIG)
+
+
+def test_get_history_rejects_other_account_record():
+    session = FakeSession(
+        FakeResponse(
+            body={
+                "code": 0,
+                "msg": "",
+                "data": [{"batchno": 20260710, "usercode": "OTHER"}],
+            }
+        )
+    )
+
+    with pytest.raises(SubmissionError, match="其他账号"):
+        SandauClient(session=session).get_history(CONFIG)
+
+
+def test_get_history_rejects_non_list_data():
+    session = FakeSession(FakeResponse(body={"code": 0, "msg": "", "data": {}}))
+
+    with pytest.raises(SubmissionError, match="data 不是数组"):
+        SandauClient(session=session).get_history(CONFIG)
+
+
+def test_get_history_rejects_server_error():
+    session = FakeSession(
+        FakeResponse(body={"code": 500, "msg": "查询失败", "data": None})
+    )
+
+    with pytest.raises(SubmissionError, match="500.*查询失败"):
+        SandauClient(session=session).get_history(CONFIG)
+
+
+def test_get_server_batchno_uses_school_server_date():
+    session = FakeSession(
+        FakeResponse(body={"code": 0, "msg": "", "data": "2026-07-10 11:09:33"})
+    )
+
+    batchno = SandauClient(session=session).get_server_batchno(
+        CONFIG, timestamp_ms=1700000000123
+    )
+
+    assert batchno == "20260710"
+    url, request = session.calls[0]
+    assert url.endswith("/report/report/currentTime")
+    assert request["json"] == {}
+    assert request["headers"]["ts"] == "1700000000123"
+
+
+def test_get_server_batchno_rejects_invalid_time():
+    session = FakeSession(
+        FakeResponse(body={"code": 0, "msg": "", "data": "not-a-time"})
+    )
+
+    with pytest.raises(SubmissionError, match="时间格式无效"):
+        SandauClient(session=session).get_server_batchno(CONFIG)
